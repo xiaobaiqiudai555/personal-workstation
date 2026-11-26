@@ -1,4 +1,4 @@
-const CACHE = 'ws-cache-v3';
+const CACHE = 'ws-cache-v5';
 const ASSETS = [
   './',
   './index.html',
@@ -7,6 +7,7 @@ const ASSETS = [
   './js/db.js',
   './js/app.js',
   './js/data/vocab-data.js',
+  './js/data/decks.js',
   './js/data/knowledge-data.js',
   './js/data/zhouyi-data.js',
   './manifest.webmanifest',

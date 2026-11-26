@@ -32,27 +32,57 @@ window.WS = window.WS || {};
    * ================================================================ */
   const VOCAB = { queue: [], idx: 0, reveal: false };
 
+  const DECK_META = window.WS_DECK_META || {};
+  const DECKS = window.WS_DECKS || {};
+
+  function activeDeckKeys(v) {
+    if (!v.activeDecks || !v.activeDecks.length) v.activeDecks = ['cet4'];
+    return v.activeDecks;
+  }
+
+  function shuffleArr(a) {
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      const t = a[i]; a[i] = a[j]; a[j] = t;
+    }
+    return a;
+  }
+
   function ensureVocabSeeded() {
     const v = DB.get('vocab');
-    if (!v.seeded && (!v.words || v.words.length === 0)) {
-      v.words = (window.WS_VOCAB || []).map(w => ({
-        id: uid(), w: w.w, p: w.p || '', m: w.m || '',
-        ef: 2.5, interval: 0, due: 0, reps: 0, lapses: 0, seen: false, added: Date.now()
-      }));
-      v.seeded = true;
-      DB.set('vocab', v);
-    }
+    v.words = v.words || [];
+    let changed = false;
+    v.words.forEach(w => { if (!w.deck) { w.deck = 'cet4'; changed = true; } });
+    const active = activeDeckKeys(v);
+    const existing = new Set(v.words.map(x => x.w.toLowerCase()));
+    let added = 0;
+    active.forEach(dk => {
+      (DECKS[dk] || []).forEach(it => {
+        const wl = it.w.toLowerCase();
+        if (existing.has(wl)) return;
+        v.words.push({
+          id: uid(), w: it.w, p: it.p || '', m: it.m || '', e: it.e || '', ec: it.ec || '',
+          deck: dk, ef: 2.5, interval: 0, due: 0, reps: 0, lapses: 0, seen: false, added: Date.now()
+        });
+        existing.add(wl);
+        added++;
+      });
+    });
+    if (changed || added) DB.set('vocab', v);
     return v;
   }
 
   function vocabBuild() {
     const v = ensureVocabSeeded();
+    const active = new Set(activeDeckKeys(v));
     const now = Date.now();
     const target = v.settings.daily || DB.get('settings').dailyTarget || 20;
     const tk = todayISO();
     const st = v.stats[tk] || { done: 0, new: 0 };
-    const due = v.words.filter(w => w.seen && w.due && w.due <= now);
-    const fresh = v.words.filter(w => !w.seen);
+    const pool = v.words.filter(w => active.has(w.deck));
+    const due = pool.filter(w => w.seen && w.due && w.due <= now);
+    const fresh = pool.filter(w => !w.seen);
+    if (active.size > 1) shuffleArr(fresh);
     const remain = Math.max(0, target - st.new);
     VOCAB.queue = due.concat(fresh.slice(0, remain));
     VOCAB.idx = Math.min(VOCAB.idx, Math.max(0, VOCAB.queue.length - 1));
@@ -98,9 +128,16 @@ window.WS = window.WS || {};
     const target = v.settings.daily || 20;
     const streak = streakOf(v.stats);
     const now = Date.now();
-    const dueCount = v.words.filter(w => w.seen && w.due && w.due <= now).length;
-    const freshCount = v.words.filter(w => !w.seen).length;
+    const active = activeDeckKeys(v);
+    const pool = v.words.filter(w => active.includes(w.deck));
+    const dueCount = pool.filter(w => w.seen && w.due && w.due <= now).length;
+    const freshCount = pool.filter(w => !w.seen).length;
     const cur = VOCAB.queue[VOCAB.idx];
+    const mix = active.length > 1;
+    const deckChips = active.map(d => {
+      const meta = DECK_META[d] || {};
+      return `<span class="tag-chip on">${esc(meta.name || d)}${meta.count ? ' ' + meta.count : ''}</span>`;
+    }).join('');
 
     let body;
     if (!cur) {
@@ -110,21 +147,22 @@ window.WS = window.WS || {};
         <h2>今日完成</h2>
         <p class="muted">今日已学 ${st.done || 0} 个 · 新词 ${st.new || 0}/${target}</p>
         ${freshCount > 0
-          ? `<p class="muted">还剩 ${freshCount} 个新词，可以再来一批</p>
+          ? `<p class="muted">还有 ${freshCount} 个新词待学</p>
              <button class="btn btn-primary" data-act="vocab-more">再来 5 个新词</button>`
-          : `<p class="muted">词库已全部过一遍，进入复习节奏。</p>`}
+          : `<p class="muted">当前词库已学完，进入复习节奏。</p>`}
       </section>`;
     } else {
       body = `
       <section class="card word-card">
         <div class="word-top">
-          <span class="chip">第 ${VOCAB.idx + 1}/${VOCAB.queue.length} 个</span>
+          <span class="chip">${mix ? '随机混合 · ' : ''}第 ${VOCAB.idx + 1}/${VOCAB.queue.length} 个</span>
           <span class="muted">今日 ${st.done || 0}/${target}</span>
         </div>
         <h1 class="word">${esc(cur.w)}</h1>
         <p class="word-p">${esc(cur.p || '')}</p>
         ${VOCAB.reveal
-          ? `<p class="word-m">${esc(cur.m || '')}</p>`
+          ? `<p class="word-m">${esc(cur.m || '')}</p>
+             ${cur.e ? `<p class="muted" style="margin-top:8px">${esc(cur.e)}</p><p class="muted" style="font-size:12px">${esc(cur.ec || '')}</p>` : ''}`
           : `<button class="btn btn-soft" data-act="vocab-reveal">显示释义</button>`}
       </section>
       <div class="grade-row">
@@ -143,7 +181,43 @@ window.WS = window.WS || {};
         <a class="btn btn-soft" href="#/import" style="min-height:34px;padding:0 12px">导入</a>
         <span class="chip" style="margin:0">连续 ${streak} 天</span>
       </div>
-    </header>${body}`;
+    </header>
+    <div class="chip-wrap" style="margin-top:-6px">
+      ${deckChips}
+      <button class="chip-btn" data-act="deck-pick">选词库</button>
+    </div>
+    ${body}`;
+  }
+
+  function deckPickerModal() {
+    const v = DB.get('vocab');
+    const active = new Set(activeDeckKeys(v));
+    const keys = ['cet4', 'cet6', 'ielts', 'industry'];
+    const m = modal(`
+      <h3 class="modal-title">选择词库</h3>
+      <p class="muted" style="margin:0 0 8px">可多选，选多个 = 随机混合出题。</p>
+      <div class="chip-wrap" id="deck-chips">
+        ${keys.map(k => `<button class="chip-btn ${active.has(k) ? 'on' : ''}" data-k="${k}">${esc((DECK_META[k] && DECK_META[k].name) || k)}${DECK_META[k] ? ' (' + DECK_META[k].count + ')' : ''}</button>`).join('')}
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" data-close>取消</button>
+        <button class="btn btn-primary" id="deck-save">保存</button>
+      </div>`);
+    const chips = m.el.querySelector('#deck-chips');
+    chips.addEventListener('click', e => {
+      const b = e.target.closest('[data-k]');
+      if (!b) return;
+      const k = b.dataset.k;
+      if (active.has(k)) active.delete(k); else active.add(k);
+      b.classList.toggle('on', active.has(k));
+    });
+    m.el.querySelector('[data-close]').onclick = m.close;
+    m.el.querySelector('#deck-save').onclick = () => {
+      if (!active.size) { toast('至少选一个词库'); return; }
+      DB.update('vocab', v => { v.activeDecks = [...active]; });
+      m.close();
+      render();
+    };
   }
 
   /* ================================================================
@@ -985,6 +1059,7 @@ window.WS = window.WS || {};
     const fab = document.getElementById('fab');
     fab.style.display = (name === 'home' || name === 'notes') ? '' : 'none';
     document.getElementById('app').scrollTop = 0;
+    try { refreshBanner(visibleDue()); } catch (e) {}
   }
 
   /* ================================================================
@@ -1039,6 +1114,7 @@ window.WS = window.WS || {};
         DB.update('vocab', v => { v.settings.daily = (v.settings.daily || 20) + 5; });
         toast('今日目标 +5'); render(); return;
       }
+      if (act === 'deck-pick') { deckPickerModal(); return; }
 
       /* ---- 健身 ---- */
       if (act === 'fit-part') { toggleSet(FIT.parts, t.dataset.v); render(); return; }
@@ -1084,6 +1160,30 @@ window.WS = window.WS || {};
       if (act === 'rem-ics-work') {
         const it = DB.get('reminders').work.find(x => x.id === t.dataset.id);
         if (it) download(`提醒-${(it.title || 'work').slice(0, 12)}.ics`, buildICSWork(it), 'text/calendar');
+        return;
+      }
+      if (act === 'rem-done-now') {
+        const id = t.dataset.id;
+        DB.update('reminders', r => {
+          const it = r.daily.find(x => x.id === id);
+          if (it) {
+            const tk = todayISO();
+            it.doneOn = it.doneOn || [];
+            if (!it.doneOn.includes(tk)) it.doneOn.push(tk);
+          }
+        });
+        delete REM_ALERTS.lastFire[id];
+        delete REM_ALERTS.snooze[id];
+        toast('已完成');
+        render();
+        return;
+      }
+      if (act === 'rem-snooze') {
+        const id = t.dataset.id;
+        REM_ALERTS.snooze[id] = Date.now() + 5 * 60000;
+        REM_ALERTS.lastFire[id] = Date.now();
+        toast('5 分钟后再提醒');
+        render();
         return;
       }
 
@@ -1416,6 +1516,8 @@ window.WS = window.WS || {};
     return `BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//个人工作站//CN\r\nCALSCALE:GREGORIAN\r\nBEGIN:VEVENT\r\nUID:${w.id}@ws\r\nDTSTART;TZID=Asia/Shanghai:${fmtICSDate(d)}\r\nDTEND;TZID=Asia/Shanghai:${fmtICSDate(end)}\r\nSUMMARY:${icsSafe(w.title)}\r\nBEGIN:VALARM\r\nTRIGGER:-PT10M\r\nACTION:DISPLAY\r\nDESCRIPTION:${icsSafe(w.title)}\r\nEND:VALARM\r\nEND:VEVENT\r\nEND:VCALENDAR`;
   }
 
+  const REM_ALERTS = { lastFire: {}, snooze: {} };
+
   let audioCtx = null;
   function playBeep() {
     try {
@@ -1434,31 +1536,68 @@ window.WS = window.WS || {};
 
   function fireReminder(it) {
     const s = DB.get('settings');
-    toast(`⏰ ${it.text}`, 5000);
+    toast(`⏰ ${it.text}`, 6000);
     if (s.sound !== false) playBeep();
-    if (s.vibrate !== false && 'vibrate' in navigator) { try { navigator.vibrate([300, 150, 300]); } catch (e) {} }
-    if (s.notify === true && 'Notification' in window && Notification.permission === 'granted') {
-      try { new Notification('个人工作站提醒', { body: it.text }); } catch (e) {}
+    if (s.vibrate !== false && 'vibrate' in navigator) { try { navigator.vibrate([400, 200, 400]); } catch (e) {} }
+    if (s.notify === true && 'Notification' in window) {
+      if (Notification.permission === 'granted') {
+        try { new Notification('个人工作站提醒', { body: it.text }); } catch (e) {}
+      } else if (Notification.permission === 'default') {
+        try { Notification.requestPermission(); } catch (e) {}
+      }
     }
   }
 
-  function checkDueNow() {
+  // 长提醒：到点后持续有效，直到当天标记完成
+  function dueTodayReminders() {
     const now = new Date();
     const hm = `${pad(now.getHours())}:${pad(now.getMinutes())}`;
     const tk = todayISO();
     const wd = now.getDay();
-    let hit = null;
-    DB.update('reminders', r => {
-      r.daily.forEach(it => {
-        if (it.enabled === false) return;
-        if (it.time !== hm) return;
-        if (!(it.days || []).includes(wd)) return;
-        if (it.firedOn === tk) return;
-        it.firedOn = tk;
-        hit = it;
-      });
+    return DB.get('reminders').daily.filter(it => {
+      if (it.enabled === false) return false;
+      if (!(it.days || []).includes(wd)) return false;
+      if ((it.doneOn || []).includes(tk)) return false;
+      if (!it.time) return false;
+      return hm >= it.time;
     });
-    if (hit) fireReminder(hit);
+  }
+
+  function visibleDue() {
+    const now = Date.now();
+    return dueTodayReminders().filter(it => now >= (REM_ALERTS.snooze[it.id] || 0));
+  }
+
+  function refreshBanner(due) {
+    const el = document.getElementById('rem-banner');
+    if (!el) return;
+    if (!due || !due.length) { el.hidden = true; el.innerHTML = ''; return; }
+    const items = due.map(it => `
+      <div class="rem-banner-item">
+        <span class="rem-banner-text">⏰ ${esc(it.text)} <span class="muted">${esc(it.time)}</span></span>
+        <span style="white-space:nowrap">
+          <button class="link" data-act="rem-done-now" data-id="${it.id}">完成</button>
+          <button class="link" data-act="rem-snooze" data-id="${it.id}">稍后</button>
+        </span>
+      </div>`).join('');
+    el.innerHTML = `<div class="rem-banner-title">长提醒 · 点「完成」才消失</div>${items}`;
+    el.hidden = false;
+  }
+
+  function checkDueNow(silent) {
+    const now = Date.now();
+    const due = dueTodayReminders();
+    due.forEach(it => {
+      const snooze = REM_ALERTS.snooze[it.id] || 0;
+      if (now < snooze) return;
+      if (silent) { REM_ALERTS.lastFire[it.id] = now; return; }
+      const lf = REM_ALERTS.lastFire[it.id] || 0;
+      if (now - lf >= 5 * 60000) {
+        REM_ALERTS.lastFire[it.id] = now;
+        fireReminder(it);
+      }
+    });
+    refreshBanner(due.filter(it => now >= (REM_ALERTS.snooze[it.id] || 0)));
   }
 
   /* ================================================================
@@ -1478,8 +1617,8 @@ window.WS = window.WS || {};
     window.addEventListener('hashchange', render);
     render();
     registerSW();
-    checkDueNow();
-    setInterval(checkDueNow, 30000);
+    checkDueNow(true);
+    setInterval(() => checkDueNow(false), 30000);
   }
 
   if (document.readyState === 'loading') {
