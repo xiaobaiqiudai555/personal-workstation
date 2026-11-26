@@ -27,10 +27,33 @@ window.WS = window.WS || {};
     return s;
   }
 
+  const ICON_PATHS = {
+    note: '<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 9h8M8 13h8M8 17h5"/>',
+    bulb: '<circle cx="12" cy="9" r="5"/><path d="M9.5 17h5M10.5 20h3"/>',
+    yijing: '<path d="M4 7h16M4 12h16M4 17h16"/>',
+    bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 8 3 8H3s3-1 3-8"/><path d="M10 21a2 2 0 0 0 4 0"/>',
+    gear: '<circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.2 5.2l2.1 2.1M16.7 16.7l2.1 2.1M18.8 5.2l-2.1 2.1M7.3 16.7l-2.1 2.1"/>',
+    camera: '<path d="M4 8h4l2-2.5h4L16 8h4v11H4z"/><circle cx="12" cy="13" r="3.3"/>',
+    image: '<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="10" r="1.5"/><path d="M21 16.5l-5-5-4 4-2-2-6 6"/>',
+    download: '<path d="M12 3.5v10"/><path d="M7.5 9l4.5 4.5L16.5 9"/><path d="M4.5 19.5h15"/>',
+    plus: '<path d="M12 5.5v13M5.5 12h13"/>',
+    book: '<path d="M5 4.5h12a2 2 0 0 1 2 2v13H6.5a2.5 2.5 0 0 1-1.5-2.3V4.5z"/><path d="M8 8h7M8 12h7"/>',
+    edit: '<path d="M4.5 20.5h4l10-10-4-4-10 10z"/><path d="M13.5 5l4 4"/>',
+    trash: '<path d="M4.5 7h15M9.5 7V4.5h5V7M7 7l1 13h8l1-13"/>',
+    pin: '<path d="M12 3l2.7 5.5 6 1-4.4 4.3 1 6-5.3-2.9L6.7 19.9l1-6L3.3 9.5l6-1z"/>',
+    sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.2 5.2l1.5 1.5M17.3 17.3l1.5 1.5M18.8 5.2l-1.5 1.5M6.7 17.3l-1.5 1.5"/>',
+    moon: '<path d="M20 14.2A8 8 0 0 1 9.8 4a8 8 0 1 0 10.2 10.2z"/>',
+    chart: '<path d="M4 20V4M4 20h16"/><path d="M8 16v-5M12 16V8M16 16v-3"/>',
+    check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>'
+  };
+  function icon(name) {
+    return `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${ICON_PATHS[name] || ''}</svg>`;
+  }
+
   /* ================================================================
    * 背单词
    * ================================================================ */
-  const VOCAB = { queue: [], idx: 0, reveal: false };
+  const VOCAB = { queue: [], idx: 0, reveal: false, view: 'study', listLimit: 100 };
 
   const DECK_META = window.WS_DECK_META || {};
   const DECKS = window.WS_DECKS || {};
@@ -130,8 +153,9 @@ window.WS = window.WS || {};
     const now = Date.now();
     const active = activeDeckKeys(v);
     const pool = v.words.filter(w => active.includes(w.deck));
-    const dueCount = pool.filter(w => w.seen && w.due && w.due <= now).length;
+    const learnedCount = pool.filter(w => w.seen).length;
     const freshCount = pool.filter(w => !w.seen).length;
+    const dueCount = pool.filter(w => w.seen && w.due && w.due <= now).length;
     const cur = VOCAB.queue[VOCAB.idx];
     const mix = active.length > 1;
     const deckChips = active.map(d => {
@@ -139,8 +163,46 @@ window.WS = window.WS || {};
       return `<span class="tag-chip on">${esc(meta.name || d)}${meta.count ? ' ' + meta.count : ''}</span>`;
     }).join('');
 
+    const seg = `
+    <div class="seg" style="margin:0 0 12px">
+      <button class="seg-btn ${VOCAB.view === 'study' ? 'on' : ''}" data-act="vocab-view" data-v="study">学习</button>
+      <button class="seg-btn ${VOCAB.view === 'learned' ? 'on' : ''}" data-act="vocab-view" data-v="learned">已学 ${learnedCount}</button>
+      <button class="seg-btn ${VOCAB.view === 'unlearned' ? 'on' : ''}" data-act="vocab-view" data-v="unlearned">未学 ${freshCount}</button>
+    </div>`;
+
     let body;
-    if (!cur) {
+    if (VOCAB.view === 'learned') {
+      const learned = pool.filter(w => w.seen).sort((a, b) => (b.last || 0) - (a.last || 0));
+      const shown = learned.slice(0, VOCAB.listLimit);
+      body = `
+      <section class="card">
+        <div class="card-head"><h2>已学单词</h2><span class="muted">${learned.length} 个</span></div>
+        ${shown.length ? shown.map(w => `
+          <div class="rem-row">
+            <div class="rem-main">
+              <div class="rem-title">${esc(w.w)} <span class="muted" style="font-size:12px">${esc(w.p || '')}</span></div>
+              <div class="rem-sub">${esc(w.m || '')}</div>
+            </div>
+            <button class="link" data-act="vocab-relearn" data-id="${w.id}">重学</button>
+          </div>`).join('') : '<p class="muted">还没有学过的单词</p>'}
+        ${learned.length > shown.length ? `<button class="btn btn-soft" data-act="vocab-more-list" style="width:100%;margin-top:8px">显示更多（${shown.length}/${learned.length}）</button>` : ''}
+      </section>`;
+    } else if (VOCAB.view === 'unlearned') {
+      const fresh = pool.filter(w => !w.seen);
+      const shown = fresh.slice(0, VOCAB.listLimit);
+      body = `
+      <section class="card">
+        <div class="card-head"><h2>未学单词</h2><span class="muted">${fresh.length} 个</span></div>
+        ${shown.length ? shown.map(w => `
+          <div class="rem-row">
+            <div class="rem-main">
+              <div class="rem-title">${esc(w.w)} <span class="muted" style="font-size:12px">${esc(w.p || '')}</span></div>
+              <div class="rem-sub">${esc(w.m || '')}</div>
+            </div>
+          </div>`).join('') : '<p class="muted">当前词库已全部学完</p>'}
+        ${fresh.length > shown.length ? `<button class="btn btn-soft" data-act="vocab-more-list" style="width:100%;margin-top:8px">显示更多（${shown.length}/${fresh.length}）</button>` : ''}
+      </section>`;
+    } else if (!cur) {
       body = `
       <section class="card empty-card">
         <p class="empty-icon">✓</p>
@@ -186,6 +248,7 @@ window.WS = window.WS || {};
       ${deckChips}
       <button class="chip-btn" data-act="deck-pick">选词库</button>
     </div>
+    ${seg}
     ${body}`;
   }
 
@@ -796,6 +859,27 @@ window.WS = window.WS || {};
     return out;
   }
 
+  // 智能整理：提取「英文 + 同行中文」配对，去重、过滤停用词，按字母排序
+  function smartOrganize(text) {
+    const lines = String(text || '').split(/\r?\n/);
+    const out = [];
+    const seen = new Set();
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      const engs = (line.toLowerCase().match(/[a-z][a-z'-]{1,}/g) || []).map(cleanWord).filter(w => w.length >= 3 && !STOPWORDS.has(w));
+      if (!engs.length) continue;
+      const cn = (line.match(/[\u4e00-\u9fa5][\u4e00-\u9fa5，、；：·（）()0-9a-zA-Z. /]*/g) || []).join(' ').trim();
+      for (const w of engs) {
+        const k = w.toLowerCase();
+        if (seen.has(k)) continue;
+        seen.add(k);
+        out.push({ w, m: cn });
+      }
+    }
+    out.sort((a, b) => a.w.localeCompare(b.w));
+    return out;
+  }
+
   function lookupWord(w) {
     return fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(w)}`)
       .then(r => (r.ok ? r.json() : null))
@@ -864,8 +948,8 @@ window.WS = window.WS || {};
       <h2>拍照 / 相册识别</h2>
       <p class="muted">识别单词，并自动提取照片里的中文释义（有则用，无则联网查词典）。图片在本机处理，不上传。</p>
       <div class="seg" style="margin:0 0 6px">
-        <button class="btn btn-primary" data-act="imp-pick" ${IMP.busy ? 'disabled' : ''}>📷 拍照</button>
-        <button class="btn btn-soft" data-act="imp-gallery" ${IMP.busy ? 'disabled' : ''}>🖼 相册</button>
+        <button class="btn btn-primary" data-act="imp-pick" ${IMP.busy ? 'disabled' : ''}>${icon('camera')} 拍照</button>
+        <button class="btn btn-soft" data-act="imp-gallery" ${IMP.busy ? 'disabled' : ''}>${icon('image')} 相册</button>
       </div>
       ${IMP.busy ? `<p class="muted center">${IMP.status || '识别中…'}</p>` : ''}
       <p class="muted center">首次使用需联网加载识别引擎（约 2MB）</p>
@@ -873,7 +957,11 @@ window.WS = window.WS || {};
     <section class="card">
       <h2>粘贴导入</h2>
       <textarea class="search-input" id="imp-paste" rows="4" placeholder="粘贴单词，可用逗号、空格或换行分隔"></textarea>
-      <button class="btn btn-soft" data-act="imp-parse" style="width:100%">解析粘贴内容</button>
+      <div class="seg" style="margin:0">
+        <button class="btn btn-soft" data-act="imp-parse">解析</button>
+        <button class="btn btn-primary" data-act="imp-smart">${icon('check')} 智能整理</button>
+      </div>
+      <p class="muted" style="margin-top:8px">智能整理：提取英文单词、配对同行中文释义、去重并按字母排序</p>
     </section>
     ${words.length ? `<section class="card">
       <div class="card-head"><h2>识别结果</h2><span class="muted">${words.filter(w => w.sel).length}/${words.length} 已选</span></div>
@@ -976,10 +1064,10 @@ window.WS = window.WS || {};
     return `
     <header class="page-head"><h1>更多</h1></header>
     <section class="menu-list">
-      <a class="card menu-item" href="#/notes"><span class="menu-ico">记</span><span><b>随手小记</b><em>${notes.length} 条笔记</em></span></a>
-      <a class="card menu-item" href="#/knowledge"><span class="menu-ico">知</span><span><b>知识扩展</b><em>联网随机 + 内置精选</em></span></a>
-      <a class="card menu-item" href="#/zhouyi"><span class="menu-ico">卦</span><span><b>周易 · 摇卦</b><em>六十四卦</em></span></a>
-      <a class="card menu-item" href="#/settings"><span class="menu-ico">设</span><span><b>设置与数据</b><em>主题 · 备份 · 安装</em></span></a>
+      <a class="card menu-item" href="#/notes"><span class="menu-ico">${icon('note')}</span><span><b>随手小记</b><em>${notes.length} 条笔记</em></span></a>
+      <a class="card menu-item" href="#/knowledge"><span class="menu-ico">${icon('bulb')}</span><span><b>知识扩展</b><em>联网随机 + 内置精选</em></span></a>
+      <a class="card menu-item" href="#/zhouyi"><span class="menu-ico">${icon('yijing')}</span><span><b>周易 · 摇卦</b><em>六十四卦</em></span></a>
+      <a class="card menu-item" href="#/settings"><span class="menu-ico">${icon('gear')}</span><span><b>设置与数据</b><em>主题 · 备份 · 安装</em></span></a>
     </section>
     <p class="muted center">本地优先 · 断网可用 · 数据只存这台手机</p>`;
   }
@@ -1115,6 +1203,18 @@ window.WS = window.WS || {};
         toast('今日目标 +5'); render(); return;
       }
       if (act === 'deck-pick') { deckPickerModal(); return; }
+      if (act === 'vocab-view') { VOCAB.view = t.dataset.v; VOCAB.listLimit = 100; render(); return; }
+      if (act === 'vocab-more-list') { VOCAB.listLimit += 100; render(); return; }
+      if (act === 'vocab-relearn') {
+        const id = t.dataset.id;
+        DB.update('vocab', v => {
+          const w = v.words.find(x => x.id === id);
+          if (w) { w.seen = false; w.due = 0; w.reps = 0; w.interval = 0; w.lapses = 0; }
+        });
+        toast('已加入待学队列');
+        render();
+        return;
+      }
 
       /* ---- 健身 ---- */
       if (act === 'fit-part') { toggleSet(FIT.parts, t.dataset.v); render(); return; }
@@ -1289,6 +1389,15 @@ window.WS = window.WS || {};
         const words = extractWords(ta ? ta.value : '');
         if (!words.length) { toast('没解析出单词'); return; }
         IMP.words = words.map(w => ({ w, m: '', sel: true }));
+        render();
+        fillMeanings();
+        return;
+      }
+      if (act === 'imp-smart') {
+        const ta = $('#imp-paste');
+        const words = smartOrganize(ta ? ta.value : '');
+        if (!words.length) { toast('没整理出单词'); return; }
+        IMP.words = words.map(x => ({ w: x.w, m: x.m || '', sel: true }));
         render();
         fillMeanings();
         return;

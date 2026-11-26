@@ -410,6 +410,19 @@ h2 { font-size: 15px; margin: 0 0 10px; }
 .tag-chip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
 .search-input { width: 100%; border: 1px solid var(--line); background: var(--card); color: var(--ink); border-radius: 12px; padding: 12px; font: inherit; margin-bottom: 10px; }
 
+/* ================= 统一图标 ================= */
+.ico {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vertical-align: -4px;
+}
+.menu-ico .ico { width: 22px; height: 22px; vertical-align: 0; }
+
 /* ================= 长提醒横幅 ================= */
 .rem-banner {
   position: fixed;

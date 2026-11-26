@@ -1,4 +1,4 @@
-const CACHE = 'ws-cache-v5';
+const CACHE = 'ws-cache-v6';
 const ASSETS = [
   './',
   './index.html',
