@@ -292,6 +292,7 @@ window.WS = window.WS || {};
               <div class="rem-sub">${esc(r.time)} · ${esc(repeatSummary(r.days))}</div>
             </div>
             <button class="chip-btn ${r.enabled !== false ? 'on' : ''}" data-act="rem-toggle-daily" data-id="${r.id}">${r.enabled !== false ? '开' : '关'}</button>
+            <button class="link" data-act="rem-ics-daily" data-id="${r.id}">日历</button>
             <button class="link danger" data-act="rem-del-daily" data-id="${r.id}">删</button>
           </div>`).join('')
         : `<p class="muted">还没有今日提醒，点下面「新增」。</p>`;
@@ -314,6 +315,7 @@ window.WS = window.WS || {};
               </div>
               <span class="pill ${pri}">${priTxt}</span>
               <button class="chip-btn ${w.done ? 'on' : ''}" data-act="rem-toggle-work" data-id="${w.id}">${w.done ? '完成' : '待办'}</button>
+              <button class="link" data-act="rem-ics-work" data-id="${w.id}">日历</button>
               <button class="link danger" data-act="rem-del-work" data-id="${w.id}">删</button>
             </div>`;
           }).join('')
@@ -325,7 +327,8 @@ window.WS = window.WS || {};
     <header class="page-head"><h1>提醒中心</h1></header>
     ${seg}
     ${body}
-    <button class="btn btn-primary" data-act="rem-add" style="width:100%">＋ 新增${REM.tab === 'daily' ? '今日提醒' : '工作提醒'}</button>`;
+    <button class="btn btn-primary" data-act="rem-add" style="width:100%">＋ 新增${REM.tab === 'daily' ? '今日提醒' : '工作提醒'}</button>
+    <p class="muted center" style="margin-top:10px">点「日历」导出 .ics，导入手机日历后由系统闹钟/日历提醒</p>`;
   }
 
   /* ================================================================
@@ -481,7 +484,7 @@ window.WS = window.WS || {};
    * 周易 · 摇卦解卦
    * ================================================================ */
   const TRIGRAMS = { 0: { s: '☷', n: '坤' }, 1: { s: '☶', n: '艮' }, 2: { s: '☵', n: '坎' }, 3: { s: '☴', n: '巽' }, 4: { s: '☳', n: '震' }, 5: { s: '☲', n: '离' }, 6: { s: '☱', n: '兑' }, 7: { s: '☰', n: '乾' } };
-  const ZY = { view: 'cast', question: '', result: null, detail: null, fromResult: false, q: '' };
+  const ZY = { view: 'cast', question: '', result: null, detail: null, fromResult: false, q: '', interpret: '', interpretLoading: false, currentRecordId: null };
   const YAO_POS = ['初', '二', '三', '四', '五', '上'];
 
   function hexByBits(lo, up) { return (window.WS_HEX || []).find(h => h.lo === lo && h.up === up); }
@@ -642,7 +645,50 @@ window.WS = window.WS || {};
       <button class="btn btn-soft" data-act="zy-cast">再摇一卦</button>
       <button class="btn btn-soft" data-act="zy-detail" data-n="${r.hex.n}">查看本卦全文</button>
     </div>
+    <section class="card">
+      <div class="card-head"><h2>白话解卦</h2></div>
+      ${ZY.interpretLoading
+        ? '<p class="muted">AI 解读中…</p>'
+        : (ZY.interpret
+            ? `<p class="note-body" style="white-space:pre-wrap">${esc(ZY.interpret)}</p>`
+            : '<p class="muted">可联网用 AI 生成白话解读（在「设置 → AI 解卦」填 API Key）。</p>')}
+      <button class="btn ${ZY.interpretLoading ? 'btn-ghost' : 'btn-primary'}" data-act="zy-ai" ${ZY.interpretLoading ? 'disabled' : ''} style="width:100%;margin-top:8px">${ZY.interpret ? '重新解读' : 'AI 白话解卦（联网）'}</button>
+    </section>
     <p class="muted center" style="margin-top:10px">本卦看处境，变卦看走向，动爻是转折点</p>`;
+  }
+
+  function aiPrompt(r) {
+    const movingIdx = r.moving.map((m, i) => m ? i : -1).filter(i => i >= 0);
+    const movingText = movingIdx.map(i => `${yaoLabel(i, r.yang)}：${r.hex.y[i]}`).join('；');
+    const changedText = (r.changed && r.changed.n !== r.hex.n) ? `变卦：${r.changed.name}，卦辞：${r.changed.g}。` : '';
+    return `你是周易解读者。请用白话、客观、中立地解读下面这一卦，分点给出处境分析、趋势与建议，避免迷信和吉凶断言。\n所问之事：${ZY.question || '（未写明）'}\n本卦：${r.hex.name}，卦辞：${r.hex.g}\n${movingText ? '动爻：' + movingText + '\n' : ''}${changedText}`;
+  }
+
+  async function aiInterpret() {
+    const s = DB.get('settings');
+    if (!s.aiKey) { toast('先在「设置 → AI 解卦」填 API Key'); location.hash = '#/settings'; return; }
+    if (!ZY.result || !ZY.result.hex) return;
+    ZY.interpretLoading = true; ZY.interpret = ''; render();
+    try {
+      const base = (s.aiBase || 'https://api.deepseek.com').replace(/\/+$/, '');
+      const res = await fetch(base + '/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + s.aiKey },
+        body: JSON.stringify({ model: s.aiModel || 'deepseek-chat', messages: [{ role: 'user', content: aiPrompt(ZY.result) }], stream: false })
+      });
+      const d = await res.json();
+      const text = (d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content)
+        ? d.choices[0].message.content
+        : (d.error ? ('接口错误：' + (d.error.message || '未知')) : '无返回内容');
+      ZY.interpret = text;
+      if (ZY.currentRecordId) {
+        DB.update('zhouyi', z => { const rec = (z.records || []).find(x => x.id === ZY.currentRecordId); if (rec) rec.interpret = text; });
+      }
+    } catch (e) {
+      ZY.interpret = '联网解卦失败：' + e.message;
+    }
+    ZY.interpretLoading = false;
+    render();
   }
 
   /* ================================================================
@@ -650,11 +696,30 @@ window.WS = window.WS || {};
    * ================================================================ */
   const IMP = { words: [], busy: false, status: '' };
 
+  const STOPWORDS = new Set(['the','and','you','that','this','with','have','for','are','was','were','will','from','your','they','their','been','but','not','all','can','its','our','out','who','what','when','where','why','how','did','does','has','had','being','into','them','then','than','more','some','would','could','should','there','here','about','also','just','only','very','over','under']);
+  function cleanWord(w) { return w.replace(/^'+|'+$/g, ''); }
+
   function extractWords(text) {
     const toks = String(text || '').toLowerCase().match(/[a-z][a-z'-]{1,}/g) || [];
-    const stop = new Set(['the','and','you','that','this','with','have','for','are','was','were','will','from','your','they','their','been','but','not','all','can','its','our','out','who','what','when','where','why','how','did','does','has','had','being','into','them','then','than','more','some','would','could','should','there','here','about','also','just','only','very','over','under']);
-    return [...new Set(toks.map(w => w.replace(/^'+|'+$/g, '')))]
-      .filter(w => w.length >= 3 && !stop.has(w));
+    return [...new Set(toks.map(cleanWord))].filter(w => w.length >= 3 && !STOPWORDS.has(w));
+  }
+
+  // 从图片 OCR 文本按行配对「英文 + 中文释义」
+  function parseImageWords(text) {
+    const lines = String(text || '').split(/\r?\n/);
+    const out = [];
+    const seen = new Set();
+    for (const line of lines) {
+      const engs = (line.toLowerCase().match(/[a-z][a-z'-]{1,}/g) || []).map(cleanWord).filter(w => w.length >= 3 && !STOPWORDS.has(w));
+      if (!engs.length) continue;
+      const cn = (line.match(/[\u4e00-\u9fa5][\u4e00-\u9fa5，、；：·（）()0-9a-zA-Z. /]*/g) || []).join(' ');
+      for (const w of engs) {
+        if (seen.has(w)) continue;
+        seen.add(w);
+        out.push({ w, m: cn });
+      }
+    }
+    return out;
   }
 
   function lookupWord(w) {
@@ -691,7 +756,8 @@ window.WS = window.WS || {};
       const worker = await window.Tesseract.createWorker('eng', 1);
       const { data } = await worker.recognize(file);
       await worker.terminate();
-      IMP.words = extractWords(data.text).map(w => ({ w, m: '', sel: true }));
+      const parsed = parseImageWords(data.text);
+      IMP.words = (parsed.length ? parsed : extractWords(data.text).map(w => ({ w, m: '' }))).map(x => ({ w: x.w, m: x.m || '', sel: true }));
       IMP.busy = false; IMP.status = '';
       render();
       fillMeanings();
@@ -721,10 +787,14 @@ window.WS = window.WS || {};
       <h1>导入单词</h1>
     </header>
     <section class="card">
-      <h2>拍照识别</h2>
-      <p class="muted">课本、单词表照片都可，自动提取英文单词；识别在本机完成，图片不上传。</p>
-      <button class="btn btn-primary" data-act="imp-pick" ${IMP.busy ? 'disabled' : ''} style="width:100%">${IMP.busy ? (IMP.status || '识别中…') : '📷 拍照 / 选择图片'}</button>
-      <p class="muted center" style="margin-top:6px">首次使用需联网加载识别引擎（约 2MB）</p>
+      <h2>拍照 / 相册识别</h2>
+      <p class="muted">识别单词，并自动提取照片里的中文释义（有则用，无则联网查词典）。图片在本机处理，不上传。</p>
+      <div class="seg" style="margin:0 0 6px">
+        <button class="btn btn-primary" data-act="imp-pick" ${IMP.busy ? 'disabled' : ''}>📷 拍照</button>
+        <button class="btn btn-soft" data-act="imp-gallery" ${IMP.busy ? 'disabled' : ''}>🖼 相册</button>
+      </div>
+      ${IMP.busy ? `<p class="muted center">${IMP.status || '识别中…'}</p>` : ''}
+      <p class="muted center">首次使用需联网加载识别引擎（约 2MB）</p>
     </section>
     <section class="card">
       <h2>粘贴导入</h2>
@@ -859,6 +929,23 @@ window.WS = window.WS || {};
       </div>
     </section>
     <section class="card">
+      <h2>提醒方式</h2>
+      <p class="muted">到点时是否响铃 / 震动 / 弹系统通知（系统通知需授权，页面打开时生效）。</p>
+      <div class="chip-wrap">
+        <button class="chip-btn ${s.sound !== false ? 'on' : ''}" data-act="set-flag" data-k="sound">响铃</button>
+        <button class="chip-btn ${s.vibrate !== false ? 'on' : ''}" data-act="set-flag" data-k="vibrate">震动</button>
+        <button class="chip-btn ${s.notify === true ? 'on' : ''}" data-act="set-flag" data-k="notify">系统通知</button>
+      </div>
+    </section>
+    <section class="card">
+      <h2>AI 解卦（可选联网）</h2>
+      <p class="muted">填 DeepSeek API Key 后，周易解卦页可联网生成白话解读；不填则只显示经文。</p>
+      <input class="search-input" id="set-aikey" type="password" placeholder="API Key（sk-…）" value="${esc(s.aiKey || '')}">
+      <input class="search-input" id="set-aimodel" placeholder="模型（默认 deepseek-chat）" value="${esc(s.aiModel || '')}">
+      <button class="btn btn-soft" data-act="save-ai" style="width:100%">保存 AI 设置</button>
+      <p class="muted" style="margin-top:8px">Key 只存本机浏览器，仅发往 DeepSeek API，不上传其他服务。</p>
+    </section>
+    <section class="card">
       <h2>数据备份</h2>
       <p class="muted">所有数据保存在本机浏览器。换手机或清理浏览器前，先导出备份。</p>
       <div class="seg">
@@ -920,6 +1007,21 @@ window.WS = window.WS || {};
         DB.update('settings', s => { s.dailyTarget = parseInt(t.dataset.v, 10); });
         render(); return;
       }
+      if (act === 'set-flag') {
+        const k = t.dataset.k;
+        const def = (k === 'notify') ? false : true;
+        DB.update('settings', s => { const cur = (s[k] === undefined) ? def : s[k]; s[k] = !cur; });
+        if (k === 'notify' && DB.get('settings').notify && 'Notification' in window && Notification.permission === 'default') {
+          Notification.requestPermission();
+        }
+        render(); return;
+      }
+      if (act === 'save-ai') {
+        const k = ($('#set-aikey') ? $('#set-aikey').value : '').trim();
+        const m = ($('#set-aimodel') ? $('#set-aimodel').value : '').trim();
+        DB.update('settings', s => { s.aiKey = k; if (m) s.aiModel = m; });
+        toast('已保存'); render(); return;
+      }
       if (act === 'export') { download(`个人工作站备份-${todayISO()}.json`, JSON.stringify(DB.exportAll(), null, 2)); toast('备份已导出'); return; }
       if (act === 'import') { doImport(); return; }
       if (act === 'reset') {
@@ -974,6 +1076,16 @@ window.WS = window.WS || {};
         confirm('删除这条工作提醒？').then(ok => { if (!ok) return; DB.update('reminders', r => { r.work = r.work.filter(x => x.id !== t.dataset.id); }); toast('已删除'); render(); });
         return;
       }
+      if (act === 'rem-ics-daily') {
+        const it = DB.get('reminders').daily.find(x => x.id === t.dataset.id);
+        if (it) download(`提醒-${(it.text || 'daily').slice(0, 12)}.ics`, buildICSDaily(it), 'text/calendar');
+        return;
+      }
+      if (act === 'rem-ics-work') {
+        const it = DB.get('reminders').work.find(x => x.id === t.dataset.id);
+        if (it) download(`提醒-${(it.title || 'work').slice(0, 12)}.ics`, buildICSWork(it), 'text/calendar');
+        return;
+      }
 
       /* ---- 首页 ---- */
       if (act === 'home-toggle-daily') {
@@ -1018,9 +1130,11 @@ window.WS = window.WS || {};
         ZY.question = ($('#zy-q') ? $('#zy-q').value : '').trim();
         const r = castHex();
         ZY.result = r; ZY.view = 'result'; ZY.fromResult = false;
+        ZY.interpret = ''; ZY.interpretLoading = false;
+        ZY.currentRecordId = uid();
         DB.update('zhouyi', z => {
           z.records = z.records || [];
-          z.records.push({ id: uid(), time: Date.now(), question: ZY.question, lines: r.lines, yang: r.yang, moving: r.moving, hexName: r.hex ? r.hex.name : '' });
+          z.records.push({ id: ZY.currentRecordId, time: Date.now(), question: ZY.question, lines: r.lines, yang: r.yang, moving: r.moving, hexName: r.hex ? r.hex.name : '' });
         });
         render(); return;
       }
@@ -1041,6 +1155,9 @@ window.WS = window.WS || {};
           ZY.question = rec.question || '';
           ZY.result = buildResult(rec.lines, rec.yang, rec.moving);
           ZY.view = 'result'; ZY.fromResult = false;
+          ZY.currentRecordId = rec.id;
+          ZY.interpret = rec.interpret || '';
+          ZY.interpretLoading = false;
           render();
         }
         return;
@@ -1049,12 +1166,20 @@ window.WS = window.WS || {};
         confirm('清空所有起卦记录？').then(ok => { if (!ok) return; DB.update('zhouyi', z => { z.records = []; }); toast('已清空'); render(); });
         return;
       }
+      if (act === 'zy-ai') { aiInterpret(); return; }
 
       /* ---- 导入单词 ---- */
       if (act === 'imp-back') { location.hash = '#/vocab'; return; }
       if (act === 'imp-pick') {
         const inp = document.createElement('input');
         inp.type = 'file'; inp.accept = 'image/*'; inp.capture = 'environment';
+        inp.onchange = () => { if (inp.files && inp.files[0]) runOCR(inp.files[0]); };
+        inp.click();
+        return;
+      }
+      if (act === 'imp-gallery') {
+        const inp = document.createElement('input');
+        inp.type = 'file'; inp.accept = 'image/*';
         inp.onchange = () => { if (inp.files && inp.files[0]) runOCR(inp.files[0]); };
         inp.click();
         return;
@@ -1257,6 +1382,66 @@ window.WS = window.WS || {};
   /* ================================================================
    * 提醒引擎
    * ================================================================ */
+  function pad2(n) { return String(n).padStart(2, '0'); }
+  function icsSafe(s) { return String(s == null ? '' : s).replace(/[\r\n,;]/g, ' '); }
+
+  function dailyNextDateTime(time) {
+    const now = new Date();
+    const p = (time || '08:00').split(':').map(Number);
+    const d = new Date(now);
+    d.setHours(p[0] || 0, p[1] || 0, 0, 0);
+    if (d <= now) d.setDate(d.getDate() + 1);
+    return d;
+  }
+
+  function fmtICSDate(d) {
+    return `${d.getFullYear()}${pad2(d.getMonth() + 1)}${pad2(d.getDate())}T${pad2(d.getHours())}${pad2(d.getMinutes())}00`;
+  }
+
+  function rruleOf(days) {
+    const map = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'];
+    if (!days || !days.length) return '';
+    return 'RRULE:FREQ=WEEKLY;BYDAY=' + [...new Set(days)].sort().map(d => map[d]).join(',');
+  }
+
+  function buildICSDaily(it) {
+    const d = dailyNextDateTime(it.time);
+    const rrule = rruleOf(it.days);
+    return `BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//个人工作站//CN\r\nCALSCALE:GREGORIAN\r\nBEGIN:VEVENT\r\nUID:${it.id}@ws\r\nDTSTART;TZID=Asia/Shanghai:${fmtICSDate(d)}\r\n${rrule ? rrule + '\r\n' : ''}SUMMARY:${icsSafe(it.text)}\r\nBEGIN:VALARM\r\nTRIGGER:-PT0M\r\nACTION:DISPLAY\r\nDESCRIPTION:${icsSafe(it.text)}\r\nEND:VALARM\r\nEND:VEVENT\r\nEND:VCALENDAR`;
+  }
+
+  function buildICSWork(w) {
+    const d = new Date(w.due || Date.now());
+    const end = new Date(d.getTime() + 30 * 60000);
+    return `BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//个人工作站//CN\r\nCALSCALE:GREGORIAN\r\nBEGIN:VEVENT\r\nUID:${w.id}@ws\r\nDTSTART;TZID=Asia/Shanghai:${fmtICSDate(d)}\r\nDTEND;TZID=Asia/Shanghai:${fmtICSDate(end)}\r\nSUMMARY:${icsSafe(w.title)}\r\nBEGIN:VALARM\r\nTRIGGER:-PT10M\r\nACTION:DISPLAY\r\nDESCRIPTION:${icsSafe(w.title)}\r\nEND:VALARM\r\nEND:VEVENT\r\nEND:VCALENDAR`;
+  }
+
+  let audioCtx = null;
+  function playBeep() {
+    try {
+      audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+      const o = audioCtx.createOscillator();
+      const g = audioCtx.createGain();
+      o.connect(g); g.connect(audioCtx.destination);
+      o.frequency.value = 880; o.type = 'sine';
+      g.gain.setValueAtTime(0.0001, audioCtx.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.3, audioCtx.currentTime + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.6);
+      o.start(); o.stop(audioCtx.currentTime + 0.65);
+    } catch (e) { /* 忽略 */ }
+  }
+
+  function fireReminder(it) {
+    const s = DB.get('settings');
+    toast(`⏰ ${it.text}`, 5000);
+    if (s.sound !== false) playBeep();
+    if (s.vibrate !== false && 'vibrate' in navigator) { try { navigator.vibrate([300, 150, 300]); } catch (e) {} }
+    if (s.notify === true && 'Notification' in window && Notification.permission === 'granted') {
+      try { new Notification('个人工作站提醒', { body: it.text }); } catch (e) {}
+    }
+  }
+
   function checkDueNow() {
     const now = new Date();
     const hm = `${pad(now.getHours())}:${pad(now.getMinutes())}`;
@@ -1273,7 +1458,7 @@ window.WS = window.WS || {};
         hit = it;
       });
     });
-    if (hit) toast(`⏰ ${hit.text}`, 3500);
+    if (hit) fireReminder(hit);
   }
 
   /* ================================================================
